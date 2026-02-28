@@ -1,0 +1,194 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// User model - can be Job Seeker, Company, or Super Admin
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String
+  name          String
+  phone         String?
+  role          UserRole  @default(JOB_SEEKER)
+  
+  // Profile fields
+  profilePicture String?
+  headline       String?
+  summary        String?   // Bio/About section
+  
+  // Location
+  country        String?
+  city           String?
+  address        String?
+  
+  // Job Seeker specific
+  skills         String?   // JSON string array
+  experience     String?   // Years of experience
+  education      String?   // JSON string array
+  resume         String?   // File path to resume
+  
+  // Timestamps
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  
+  // Relations
+  company        Company?
+  applications   Application[]
+  notifications  Notification[]
+  
+  @@map("users")
+}
+
+model Company {
+  id            String      @id @default(cuid())
+  userId        String      @unique
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  companyName   String
+  description   String?
+  website       String?
+  logo          String?
+  industry      String?
+  companySize   String?     // e.g., "1-10", "11-50", "51-200", "201-500", "500+"
+  foundedYear   Int?
+  
+  // Location
+  country       String?
+  city          String?
+  address       String?
+  
+  // Status
+  isVerified    Boolean     @default(false)
+  
+  // Timestamps
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  
+  // Relations
+  jobs          Job[]
+  
+  @@map("companies")
+}
+
+model Job {
+  id              String        @id @default(cuid())
+  companyId       String
+  company         Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  title           String
+  description     String        // HTML or markdown content
+  requirements    String?       // JSON string array
+  responsibilities String?      // JSON string array
+  
+  // Location
+  country         String?
+  city            String?
+  workMode        WorkMode      @default(ONSITE)
+  
+  // Compensation
+  salaryMin       Int?
+  salaryMax       Int?
+  salaryCurrency  String        @default("USD")
+  salaryPeriod    String        @default("yearly") // yearly, monthly, hourly
+  
+  // Job Details
+  jobType         JobType       @default(FULL_TIME)
+  experienceLevel String?       // Entry, Mid, Senior, Executive
+  skills          String?       // JSON string array
+  
+  // Status
+  status          JobStatus     @default(OPEN)
+  applicationDeadline DateTime?
+  
+  // Timestamps
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  // Relations
+  applications    Application[]
+  
+  @@map("jobs")
+}
+
+model Application {
+  id            String            @id @default(cuid())
+  jobId         String
+  job           Job               @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  coverLetter   String?
+  resume        String?           // File path to resume (can be different from profile resume)
+  
+  status        ApplicationStatus @default(PENDING)
+  
+  // Timestamps
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  
+  // Unique constraint - one application per user per job
+  @@unique([jobId, userId])
+  @@map("applications")
+}
+
+model Notification {
+  id            String    @id @default(cuid())
+  companyId     String    // The company that receives the notification
+  userId        String    // The user who triggered the notification
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  title         String
+  message       String
+  type          String    // APPLICATION, STATUS_UPDATE, etc.
+  relatedId     String?   // ID of related entity (application, job, etc.)
+  
+  isRead        Boolean   @default(false)
+  
+  createdAt     DateTime  @default(now())
+  
+  @@map("notifications")
+}
+
+enum UserRole {
+  JOB_SEEKER
+  COMPANY
+  SUPER_ADMIN
+}
+
+enum WorkMode {
+  REMOTE
+  HYBRID
+  ONSITE
+}
+
+enum JobType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  INTERNSHIP
+  FREELANCE
+}
+
+enum JobStatus {
+  DRAFT
+  OPEN
+  CLOSED
+  FILLED
+}
+
+enum ApplicationStatus {
+  PENDING
+  REVIEWING
+  INTERVIEWED
+  REJECTED
+  ACCEPTED
+  WITHDRAWN
+}
