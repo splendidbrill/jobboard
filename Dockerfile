@@ -28,6 +28,10 @@ ENV PORT=3000
 # Copy the standalone output from builder
 COPY --from=builder /app/.next/standalone ./
 
+# Next.js standalone output doesn't include public/ and .next/static folders
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next/static ./.next/static
+
 EXPOSE 3000
 
 CMD ["bun", "server.js"]
