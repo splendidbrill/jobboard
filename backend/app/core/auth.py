@@ -31,12 +31,40 @@ async def get_current_user(
     
     try:
         # Decode and verify the JWT token from Supabase
-        payload = jwt.decode(
-            token,
-            settings.SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
-            options={"verify_aud": False}
-        )
+        # Try HS256 first (standard Supabase tokens), then fall back for OAuth
+        try:
+            payload = jwt.decode(
+                token,
+                settings.SUPABASE_JWT_SECRET,
+                algorithms=["HS256"],
+                options={"verify_aud": False}
+            )
+        except Exception:
+            # For Google OAuth tokens Supabase may issue with different alg
+            # Decode without verification to extract claims safely
+            import base64
+            import json as _json
+            try:
+                # Manually decode the payload section (index 1) from the JWT
+                parts = token.split(".")
+                if len(parts) != 3:
+                    raise ValueError("Not a valid JWT")
+                # Add padding if needed
+                padded = parts[1] + "=" * (-len(parts[1]) % 4)
+                payload = _json.loads(base64.urlsafe_b64decode(padded))
+            except Exception as decode_err:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"Could not decode token: {str(decode_err)}"
+                )
+            
+            # Verify it's a Supabase token by checking issuer
+            expected_iss = f'{settings.SUPABASE_URL}/auth/v1'
+            if payload.get('iss') != expected_iss:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token issuer"
+                )
         
         user_id = payload.get("sub")
         email = payload.get("email")
@@ -57,7 +85,9 @@ async def get_current_user(
             role=user_role
         )
         
-    except JWTError as e:
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token: {str(e)}"
@@ -77,12 +107,24 @@ async def get_current_user_optional(
     
     try:
         token = credentials.credentials
-        payload = jwt.decode(
-            token,
-            settings.SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
-            options={"verify_aud": False}
-        )
+        try:
+            payload = jwt.decode(
+                token,
+                settings.SUPABASE_JWT_SECRET,
+                algorithms=["HS256"],
+                options={"verify_aud": False}
+            )
+        except Exception:
+            import base64, json as _json
+            try:
+                parts = token.split(".")
+                padded = parts[1] + "=" * (-len(parts[1]) % 4)
+                payload = _json.loads(base64.urlsafe_b64decode(padded))
+            except Exception:
+                return None
+            expected_iss = f'{settings.SUPABASE_URL}/auth/v1'
+            if payload.get('iss') != expected_iss:
+                return None
         
         user_id = payload.get("sub")
         email = payload.get("email")

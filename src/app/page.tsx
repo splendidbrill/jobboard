@@ -3,8 +3,10 @@
 // JobConnect - Job Board Application
 
 import { useEffect, useState, useCallback } from "react"
+import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
 import { api } from "@/lib/supabase"
+import NextLink from "next/link"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   Briefcase, Building2, Users, Search, MapPin, DollarSign, Clock,
@@ -122,17 +124,29 @@ interface Notification {
 }
 
 export default function JobBoardApp() {
-  const { user, session, loading, signUp, signIn, signInWithGoogle, signOut } = useAuth()
+  const { user, session, loading, signUp, signIn, signInWithGoogle, signOut, requireRoleSelection, requireEmailConfirmation, completeOnboarding } = useAuth()
+  const router = useRouter()
+  
+  // Redirect to separate onboarding route if needed
+  useEffect(() => {
+    if (requireEmailConfirmation || requireRoleSelection) {
+      router.push("/onboarding")
+    }
+  }, [requireEmailConfirmation, requireRoleSelection, router])
+
   // View state - can manually toggle between views when logged in
   const [showDashboard, setShowDashboard] = useState(false)
   // Active view is derived from session + user preference
   const activeView = session && showDashboard ? "dashboard" : "landing"
   const [jobs, setJobs] = useState<Job[]>([])
+  const [myJobs, setMyJobs] = useState<Job[]>([])
   const [companies, setCompanies] = useState<Company[]>([])
   const [applications, setApplications] = useState<Application[]>([])
   const [notifications, setNotifications] = useState<{ notifications: Notification[]; unreadCount: number }>({ notifications: [], unreadCount: 0 })
   const [userProfile, setUserProfile] = useState<any>(null)
   const [companyProfile, setCompanyProfile] = useState<Company | null>(null)
+  const [companyForm, setCompanyForm] = useState<any>({})
+  const [expandedApplicant, setExpandedApplicant] = useState<string | null>(null)
   
   // Filters
   const [searchQuery, setSearchQuery] = useState("")
@@ -149,6 +163,7 @@ export default function JobBoardApp() {
   const [showJobModal, setShowJobModal] = useState(false)
   const [showApplyModal, setShowApplyModal] = useState(false)
   const [showPostJobModal, setShowPostJobModal] = useState(false)
+  const [editingJob, setEditingJob] = useState<Job | null>(null)
   const [showNotifications, setShowNotifications] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   
@@ -198,6 +213,16 @@ export default function JobBoardApp() {
     loadInitialData()
   }, [searchQuery, selectedProfession, selectedCountry, selectedCity, selectedJobType, selectedWorkMode])
 
+  // Fetch company-specific jobs
+  const fetchMyJobs = useCallback(async () => {
+    try {
+      const data = await api.get("/jobs/my-jobs")
+      setMyJobs(data)
+    } catch (error) {
+      console.error("Error fetching my jobs:", error)
+    }
+  }, [])
+
   // Handle session-based data loading
   useEffect(() => {
     const loadUserData = async () => {
@@ -214,12 +239,21 @@ export default function JobBoardApp() {
       // Fetch company profile if company user
       if (user.role === "COMPANY") {
         try {
-          const data = await api.get("/companies")
-          const company = data.find((c: Company) => c.userId === user.id)
-          setCompanyProfile(company || null)
+          const data = await api.get("/companies/me")
+          setCompanyProfile(data)
+          setCompanyForm({
+            companyName: data.companyName || "",
+            website: data.website || "",
+            industry: data.industry || "",
+            companySize: data.companySize || "",
+            country: data.country || "",
+            city: data.city || "",
+            description: data.description || "",
+          })
         } catch (error) {
           console.error("Error fetching company profile:", error)
         }
+        await fetchMyJobs()
       }
       
       // Fetch applications
@@ -258,7 +292,7 @@ export default function JobBoardApp() {
     }
     
     loadUserData()
-  }, [user])
+  }, [user, fetchMyJobs])
 
   // Handle login
   const handleLogin = async (e: React.FormEvent) => {
@@ -338,35 +372,102 @@ export default function JobBoardApp() {
     }
   }
 
-  // Handle post job
+  // Handle post job or edit job
   const handlePostJob = async (e: React.FormEvent) => {
     e.preventDefault()
+    const payload = {
+      title: jobForm.title,
+      description: jobForm.description,
+      salary_min: parseInt(jobForm.salaryMin) || null,
+      salary_max: parseInt(jobForm.salaryMax) || null,
+      requirements: jobForm.requirements.split("\n").filter(Boolean),
+      responsibilities: jobForm.responsibilities.split("\n").filter(Boolean),
+      skills: jobForm.skills.split(",").map(s => s.trim()).filter(Boolean),
+      country: jobForm.country,
+      city: jobForm.city,
+      work_mode: jobForm.workMode,
+      job_type: jobForm.jobType,
+      experience_level: jobForm.experienceLevel
+    }
     try {
-      await api.post("/jobs", {
-        title: jobForm.title,
-        description: jobForm.description,
-        salary_min: parseInt(jobForm.salaryMin) || null,
-        salary_max: parseInt(jobForm.salaryMax) || null,
-        requirements: jobForm.requirements.split("\n").filter(Boolean),
-        responsibilities: jobForm.responsibilities.split("\n").filter(Boolean),
-        skills: jobForm.skills.split(",").map(s => s.trim()).filter(Boolean),
-        country: jobForm.country,
-        city: jobForm.city,
-        work_mode: jobForm.workMode,
-        job_type: jobForm.jobType,
-        experience_level: jobForm.experienceLevel
-      })
-      toast.success("Job posted successfully!")
+      if (editingJob) {
+        await api.put(`/jobs/${editingJob.id}`, payload)
+        toast.success("Job updated successfully!")
+      } else {
+        await api.post("/jobs", payload)
+        toast.success("Job posted successfully!")
+      }
       setShowPostJobModal(false)
+      setEditingJob(null)
       setJobForm({
         title: "", description: "", requirements: "", responsibilities: "",
         country: "", city: "", workMode: "ONSITE", salaryMin: "", salaryMax: "",
         jobType: "FULL_TIME", experienceLevel: "", skills: ""
       })
-      setSelectedCountry(selectedCountry)
+      await fetchMyJobs()
     } catch (error: any) {
-      toast.error(error.message || "Failed to post job")
+      toast.error(error.message || "Failed to save job")
     }
+  }
+
+  // Handle delete job
+  const handleDeleteJob = async (jobId: string) => {
+    if (!confirm("Are you sure you want to delete this job? This cannot be undone.")) return
+    try {
+      await api.delete(`/jobs/${jobId}`)
+      toast.success("Job deleted!")
+      await fetchMyJobs()
+    } catch (error: any) {
+      toast.error(error.message || "Failed to delete job")
+    }
+  }
+
+  // Handle save company profile
+  const handleSaveCompanyProfile = async () => {
+    if (!companyProfile) return
+    try {
+      const updated = await api.put(`/companies/${companyProfile.id}`, {
+        company_name: companyForm.companyName,
+        website: companyForm.website,
+        industry: companyForm.industry,
+        company_size: companyForm.companySize,
+        country: companyForm.country,
+        city: companyForm.city,
+        description: companyForm.description,
+      })
+      setCompanyProfile((prev: any) => ({ ...prev, ...updated }))
+      toast.success("Company profile saved!")
+    } catch (error: any) {
+      toast.error(error.message || "Failed to save profile")
+    }
+  }
+
+  // Open edit job modal
+  const handleEditJob = (job: Job) => {
+    setEditingJob(job)
+    const parseJson = (v: string | null) => {
+      if (!v) return ""
+      try { return JSON.parse(v).join("\n") } catch { return v }
+    }
+    const parseSkills = (v: string | null) => {
+      if (!v) return ""
+      try { return JSON.parse(v).join(", ") } catch { return v }
+    }
+    setJobForm({
+      title: job.title,
+      description: job.description,
+      requirements: parseJson(job.requirements),
+      responsibilities: parseJson(job.responsibilities),
+      country: job.country || "",
+      city: job.city || "",
+      workMode: job.workMode,
+      salaryMin: job.salaryMin?.toString() || "",
+      salaryMax: job.salaryMax?.toString() || "",
+      jobType: job.jobType,
+      experienceLevel: job.experienceLevel || "",
+      skills: parseSkills(job.skills),
+    })
+    setShowPostJobModal(true)
   }
 
   // Handle update application status
@@ -416,7 +517,7 @@ export default function JobBoardApp() {
     const periodText = period === "yearly" ? "/year" : period === "monthly" ? "/month" : "/hour"
     if (min && max) return `${currency} ${formatNum(min)} - ${formatNum(max)}${periodText}`
     if (min) return `${currency} ${formatNum(min)}+${periodText}`
-    return `Up to ${currency} ${formatNum(max)}${periodText}`
+    return `Up to ${currency} ${formatNum(max ?? 0)}${periodText}`
   }
 
   // Work mode badge color
@@ -489,12 +590,11 @@ export default function JobBoardApp() {
               )}
             </nav>
 
-            {/* Right side */}
             <div className="flex items-center gap-3">
-              {session ? (
+              {session && user ? (
                 <>
                   {/* Notifications for Company */}
-                  {user.role === "COMPANY" && (
+                  {user?.role === "COMPANY" && (
                     <div className="relative">
                       <Button 
                         variant="ghost" 
@@ -523,19 +623,20 @@ export default function JobBoardApp() {
                   
                   <div className="flex items-center gap-2">
                     <Avatar className="w-8 h-8">
-                      <AvatarImage src={user.profile_picture || ""} />
+                      <AvatarImage src={user?.profile_picture || ""} />
                       <AvatarFallback className="bg-blue-100 text-blue-600">
-                        {user.name?.charAt(0) || "U"}
+                        {user?.name?.charAt(0) || "U"}
                       </AvatarFallback>
                     </Avatar>
                     <div className="hidden sm:block">
-                      <p className="text-sm font-medium">{user.name}</p>
-                      <p className="text-xs text-slate-500 capitalize">{user.role.replace("_", " ").toLowerCase()}</p>
+                      <p className="text-sm font-medium">{user?.name}</p>
+                      <p className="text-xs text-slate-500 capitalize">{user?.role?.replace("_", " ").toLowerCase()}</p>
                     </div>
                   </div>
                   
-                  <Button variant="ghost" size="icon" onClick={() => signOut()}>
-                    <LogOut className="w-5 h-5" />
+                  <Button variant="outline" onClick={() => signOut()} className="ml-2 text-slate-600 hover:text-red-600 hover:bg-red-50">
+                    <LogOut className="w-4 h-4 sm:mr-2" />
+                    <span className="hidden sm:inline">Log Out</span>
                   </Button>
                 </>
               ) : (
@@ -1101,9 +1202,8 @@ export default function JobBoardApp() {
                               <CardTitle className="text-lg">Active Jobs</CardTitle>
                             </CardHeader>
                             <CardContent>
-                              <p className="text-3xl font-bold">
-                                {jobs.filter(j => j.company?.userId === user.id).length}
-                              </p>
+                              <p className="text-3xl font-bold">{myJobs.filter(j => j.status === "OPEN").length}</p>
+                              <p className="text-sm text-slate-500">of {myJobs.length} total</p>
                             </CardContent>
                           </Card>
                           <Card>
@@ -1116,7 +1216,7 @@ export default function JobBoardApp() {
                           </Card>
                           <Card>
                             <CardHeader>
-                              <CardTitle className="text-lg">Pending</CardTitle>
+                              <CardTitle className="text-lg">Pending Review</CardTitle>
                             </CardHeader>
                             <CardContent>
                               <p className="text-3xl font-bold">
@@ -1135,11 +1235,33 @@ export default function JobBoardApp() {
                             </CardContent>
                           </Card>
                         </div>
-                        <div className="mt-6">
-                          <Button onClick={() => setShowPostJobModal(true)}>
+                        <div className="mt-6 flex gap-3">
+                          <Button onClick={() => { setEditingJob(null); setJobForm({ title: "", description: "", requirements: "", responsibilities: "", country: "", city: "", workMode: "ONSITE", salaryMin: "", salaryMax: "", jobType: "FULL_TIME", experienceLevel: "", skills: "" }); setShowPostJobModal(true); }}>
                             <Plus className="w-4 h-4 mr-2" /> Post New Job
                           </Button>
+                          <Button variant="outline" onClick={() => setDashboardTab("applications")}>
+                            <Users className="w-4 h-4 mr-2" /> View Applications
+                          </Button>
                         </div>
+                        {myJobs.length > 0 && (
+                          <div className="mt-6">
+                            <h3 className="font-semibold mb-3 text-slate-700">Recent Job Postings</h3>
+                            <div className="space-y-2">
+                              {myJobs.slice(0, 3).map(job => (
+                                <div key={job.id} className="flex items-center justify-between p-3 border rounded-lg hover:bg-slate-50">
+                                  <div>
+                                    <p className="font-medium">{job.title}</p>
+                                    <p className="text-sm text-slate-500">{[job.city, job.country].filter(Boolean).join(", ")}</p>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Badge className={job.status === "OPEN" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-700"}>{job.status}</Badge>
+                                    <Button size="sm" variant="ghost" onClick={() => handleEditJob(job)}><Settings className="w-4 h-4" /></Button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </TabsContent>
 
                       <TabsContent value="company">
@@ -1169,52 +1291,52 @@ export default function JobBoardApp() {
                                 <div className="grid md:grid-cols-2 gap-4">
                                   <div>
                                     <Label>Company Name</Label>
-                                    <Input value={companyProfile.companyName || ""} />
+                                    <Input value={companyForm.companyName || ""} onChange={e => setCompanyForm({...companyForm, companyName: e.target.value})} />
                                   </div>
                                   <div>
                                     <Label>Website</Label>
-                                    <Input value={companyProfile.website || ""} placeholder="https://..." />
+                                    <Input value={companyForm.website || ""} onChange={e => setCompanyForm({...companyForm, website: e.target.value})} placeholder="https://..." />
                                   </div>
                                   <div>
                                     <Label>Industry</Label>
-                                    <Input value={companyProfile.industry || ""} placeholder="e.g., Technology" />
+                                    <Input value={companyForm.industry || ""} onChange={e => setCompanyForm({...companyForm, industry: e.target.value})} placeholder="e.g., Technology" />
                                   </div>
                                   <div>
                                     <Label>Company Size</Label>
-                                    <Select value={companyProfile.companySize || ""}>
+                                    <Select value={companyForm.companySize || ""} onValueChange={v => setCompanyForm({...companyForm, companySize: v})}>
                                       <SelectTrigger>
                                         <SelectValue placeholder="Select size" />
                                       </SelectTrigger>
                                       <SelectContent>
-                                        <SelectItem value="1-10">1-10</SelectItem>
-                                        <SelectItem value="11-50">11-50</SelectItem>
-                                        <SelectItem value="51-200">51-200</SelectItem>
-                                        <SelectItem value="201-500">201-500</SelectItem>
-                                        <SelectItem value="500+">500+</SelectItem>
+                                        <SelectItem value="1-10">1-10 employees</SelectItem>
+                                        <SelectItem value="11-50">11-50 employees</SelectItem>
+                                        <SelectItem value="51-200">51-200 employees</SelectItem>
+                                        <SelectItem value="201-500">201-500 employees</SelectItem>
+                                        <SelectItem value="500+">500+ employees</SelectItem>
                                       </SelectContent>
                                     </Select>
                                   </div>
                                   <div>
                                     <Label>Country</Label>
-                                    <Input value={companyProfile.country || ""} />
+                                    <Input value={companyForm.country || ""} onChange={e => setCompanyForm({...companyForm, country: e.target.value})} placeholder="e.g., United States" />
                                   </div>
                                   <div>
                                     <Label>City</Label>
-                                    <Input value={companyProfile.city || ""} />
+                                    <Input value={companyForm.city || ""} onChange={e => setCompanyForm({...companyForm, city: e.target.value})} placeholder="e.g., San Francisco" />
                                   </div>
                                 </div>
                                 <div>
                                   <Label>Description</Label>
-                                  <Textarea value={companyProfile.description || ""} rows={4} placeholder="Tell us about your company..." />
+                                  <Textarea value={companyForm.description || ""} onChange={e => setCompanyForm({...companyForm, description: e.target.value})} rows={4} placeholder="Tell us about your company, culture, mission..." />
                                 </div>
-                                <Button className="bg-gradient-to-r from-blue-600 to-indigo-600">
+                                <Button onClick={handleSaveCompanyProfile} className="bg-gradient-to-r from-blue-600 to-indigo-600">
                                   Save Changes
                                 </Button>
                               </div>
                             ) : (
                               <div className="text-center py-8">
                                 <Building className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-                                <p className="text-slate-500">Complete your company profile</p>
+                                <p className="text-slate-500">Company profile not found</p>
                               </div>
                             )}
                           </CardContent>
@@ -1226,37 +1348,66 @@ export default function JobBoardApp() {
                           <CardHeader className="flex flex-row items-center justify-between">
                             <div>
                               <CardTitle>My Job Postings</CardTitle>
-                              <CardDescription>Manage your job listings</CardDescription>
+                              <CardDescription>{myJobs.length} job{myJobs.length !== 1 ? "s" : ""} posted</CardDescription>
                             </div>
-                            <Button onClick={() => setShowPostJobModal(true)}>
+                            <Button onClick={() => { setEditingJob(null); setJobForm({ title: "", description: "", requirements: "", responsibilities: "", country: "", city: "", workMode: "ONSITE", salaryMin: "", salaryMax: "", jobType: "FULL_TIME", experienceLevel: "", skills: "" }); setShowPostJobModal(true); }}>
                               <Plus className="w-4 h-4 mr-2" /> Post New Job
                             </Button>
                           </CardHeader>
                           <CardContent>
-                            <div className="space-y-4">
-                              {jobs.filter(j => j.company?.userId === user?.id).map((job) => (
-                                <div key={job.id} className="flex items-start gap-4 p-4 border rounded-lg">
-                                  <div className="flex-1">
-                                    <h4 className="font-semibold">{job.title}</h4>
-                                    <div className="flex items-center gap-4 mt-2 text-sm text-slate-500">
-                                      <span className="flex items-center gap-1">
-                                        <MapPin className="w-4 h-4" />
-                                        {[job.city, job.country].filter(Boolean).join(", ")}
-                                      </span>
-                                      <Badge variant="outline" className={getWorkModeBadge(job.workMode)}>
-                                        {job.workMode}
-                                      </Badge>
-                                      <Badge variant="outline">
-                                        {job._count?.applications || 0} applications
-                                      </Badge>
+                            {myJobs.length === 0 ? (
+                              <div className="text-center py-12">
+                                <Briefcase className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+                                <p className="text-slate-500 mb-4">No jobs posted yet</p>
+                                <Button onClick={() => setShowPostJobModal(true)}>
+                                  <Plus className="w-4 h-4 mr-2" /> Post Your First Job
+                                </Button>
+                              </div>
+                            ) : (
+                              <div className="space-y-4">
+                                {myJobs.map((job) => (
+                                  <div key={job.id} className="p-4 border rounded-lg hover:bg-slate-50 transition-colors">
+                                    <div className="flex items-start justify-between gap-4">
+                                      <div className="flex-1">
+                                        <div className="flex items-center gap-3 mb-1">
+                                          <h4 className="font-semibold text-lg">{job.title}</h4>
+                                          <Badge className={job.status === "OPEN" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-700"}>
+                                            {job.status}
+                                          </Badge>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500">
+                                          {(job.city || job.country) && (
+                                            <span className="flex items-center gap-1">
+                                              <MapPin className="w-3 h-3" />
+                                              {[job.city, job.country].filter(Boolean).join(", ")}
+                                            </span>
+                                          )}
+                                          <Badge variant="outline" className={getWorkModeBadge(job.workMode)}>{job.workMode.replace("_", " ")}</Badge>
+                                          <Badge variant="outline">{job.jobType.replace("_", " ")}</Badge>
+                                          <span className="flex items-center gap-1 font-medium text-blue-600">
+                                            <Users className="w-3 h-3" />{job._count?.applications || 0} applicant{(job._count?.applications || 0) !== 1 ? "s" : ""}
+                                          </span>
+                                          <span className="flex items-center gap-1">
+                                            <Clock className="w-3 h-3" />{new Date(job.createdAt).toLocaleDateString()}
+                                          </span>
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-2 shrink-0">
+                                        <Button size="sm" variant="outline" onClick={() => handleEditJob(job)}>
+                                          <Settings className="w-4 h-4 mr-1" /> Edit
+                                        </Button>
+                                        <Button size="sm" variant="outline" onClick={() => { setDashboardTab("applications") }} className="text-blue-600">
+                                          <Eye className="w-4 h-4 mr-1" /> Applicants
+                                        </Button>
+                                        <Button size="sm" variant="outline" className="text-red-500 hover:bg-red-50" onClick={() => handleDeleteJob(job.id)}>
+                                          <Trash2 className="w-4 h-4" />
+                                        </Button>
+                                      </div>
                                     </div>
                                   </div>
-                                  <Badge className={job.status === "OPEN" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-700"}>
-                                    {job.status}
-                                  </Badge>
-                                </div>
-                              ))}
-                            </div>
+                                ))}
+                              </div>
+                            )}
                           </CardContent>
                         </Card>
                       </TabsContent>
@@ -1265,75 +1416,95 @@ export default function JobBoardApp() {
                         <Card>
                           <CardHeader>
                             <CardTitle>Candidate Applications</CardTitle>
-                            <CardDescription>Review and manage applications for your jobs</CardDescription>
+                            <CardDescription>{applications.length} application{applications.length !== 1 ? "s" : ""} received</CardDescription>
                           </CardHeader>
                           <CardContent>
                             {applications.length === 0 ? (
-                              <div className="text-center py-8">
+                              <div className="text-center py-12">
                                 <Users className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-                                <p className="text-slate-500">No applications yet</p>
+                                <p className="text-slate-500">No applications yet — post a job to get started!</p>
                               </div>
                             ) : (
                               <div className="space-y-4">
                                 {applications.map((app) => (
-                                  <div key={app.id} className="p-4 border rounded-lg hover:bg-slate-50">
-                                    <div className="flex items-start gap-4">
-                                      <Avatar className="w-12 h-12">
+                                  <div key={app.id} className="border rounded-xl overflow-hidden">
+                                    {/* Applicant Header Row */}
+                                    <div
+                                      className="flex items-start gap-4 p-4 cursor-pointer hover:bg-slate-50 transition-colors"
+                                      onClick={() => setExpandedApplicant(expandedApplicant === app.id ? null : app.id)}
+                                    >
+                                      <Avatar className="w-12 h-12 shrink-0">
                                         <AvatarImage src={app.user.profilePicture || ""} />
-                                        <AvatarFallback className="bg-blue-100 text-blue-600">
+                                        <AvatarFallback className="bg-blue-100 text-blue-600 font-semibold">
                                           {app.user.name?.charAt(0)}
                                         </AvatarFallback>
                                       </Avatar>
-                                      <div className="flex-1">
-                                        <div className="flex items-center justify-between">
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center justify-between gap-2 flex-wrap">
                                           <div>
                                             <h4 className="font-semibold">{app.user.name}</h4>
                                             <p className="text-sm text-slate-500">{app.user.headline || app.user.email}</p>
                                           </div>
-                                          <Badge className={getStatusBadge(app.status)}>{app.status}</Badge>
+                                          <div className="flex items-center gap-2">
+                                            <Badge className={getStatusBadge(app.status)}>{app.status}</Badge>
+                                            <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${expandedApplicant === app.id ? "rotate-180" : ""}`} />
+                                          </div>
                                         </div>
-                                        <p className="text-sm font-medium mt-2">Applied for: {app.job.title}</p>
-                                        {app.user.skills && (
-                                          <div className="flex flex-wrap gap-1 mt-2">
-                                            {JSON.parse(app.user.skills).slice(0, 4).map((skill: string, i: number) => (
-                                              <Badge key={i} variant="secondary" className="text-xs">{skill}</Badge>
-                                            ))}
+                                        <p className="text-sm font-medium text-blue-600 mt-1">Applied for: {app.job.title}</p>
+                                        <div className="flex items-center gap-3 mt-2 text-xs text-slate-400">
+                                          <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(app.createdAt).toLocaleDateString()}</span>
+                                          {app.user.email && <span className="flex items-center gap-1"><Mail className="w-3 h-3" />{app.user.email}</span>}
+                                          {app.user.phone && <span className="flex items-center gap-1"><Phone className="w-3 h-3" />{app.user.phone}</span>}
+                                        </div>
+                                        {app.user.skills && (() => { try { const s = JSON.parse(app.user.skills); return (<div className="flex flex-wrap gap-1 mt-2">{s.slice(0, 5).map((skill: string, i: number) => (<Badge key={i} variant="secondary" className="text-xs">{skill}</Badge>))}{s.length > 5 && <Badge variant="outline" className="text-xs">+{s.length - 5} more</Badge>}</div>) } catch { return null } })()}
+                                      </div>
+                                    </div>
+
+                                    {/* Expanded Detail Panel */}
+                                    {expandedApplicant === app.id && (
+                                      <div className="border-t bg-slate-50 p-4 space-y-4">
+                                        {/* Experience & Summary */}
+                                        {app.user.experience && (
+                                          <div>
+                                            <p className="text-xs font-semibold uppercase text-slate-400 mb-1 flex items-center gap-1"><Award className="w-3 h-3" /> Experience</p>
+                                            <p className="text-sm text-slate-700">{app.user.experience}</p>
                                           </div>
                                         )}
-                                        <div className="flex items-center gap-2 mt-3">
-                                          <Button 
-                                            size="sm" 
-                                            variant="outline"
-                                            onClick={() => handleUpdateStatus(app.id, "REVIEWING")}
-                                          >
-                                            <Eye className="w-4 h-4 mr-1" /> Review
+                                        {/* Cover Letter */}
+                                        {app.coverLetter && (
+                                          <div>
+                                            <p className="text-xs font-semibold uppercase text-slate-400 mb-1 flex items-center gap-1"><FileText className="w-3 h-3" /> Cover Letter</p>
+                                            <div className="bg-white border rounded-lg p-3 text-sm text-slate-700 whitespace-pre-line max-h-40 overflow-y-auto">{app.coverLetter}</div>
+                                          </div>
+                                        )}
+                                        {/* Resume */}
+                                        {(app.resume || app.user.resume) && (
+                                          <div>
+                                            <p className="text-xs font-semibold uppercase text-slate-400 mb-1 flex items-center gap-1"><Link className="w-3 h-3" /> Resume</p>
+                                            <a href={app.resume || app.user.resume || ""} target="_blank" rel="noopener noreferrer"
+                                              className="inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 font-medium underline">
+                                              <FileText className="w-4 h-4" /> View Resume
+                                            </a>
+                                          </div>
+                                        )}
+                                        {/* Action buttons */}
+                                        <div className="flex flex-wrap items-center gap-2 pt-2 border-t">
+                                          <span className="text-xs text-slate-500 mr-1">Update status:</span>
+                                          <Button size="sm" variant="outline" onClick={() => handleUpdateStatus(app.id, "REVIEWING")} disabled={app.status === "REVIEWING"}>
+                                            <Eye className="w-4 h-4 mr-1" /> Mark Reviewing
                                           </Button>
-                                          <Button 
-                                            size="sm" 
-                                            variant="outline"
-                                            className="text-green-600 hover:text-green-700"
-                                            onClick={() => handleUpdateStatus(app.id, "INTERVIEWED")}
-                                          >
-                                            <UserCheck className="w-4 h-4 mr-1" /> Interview
+                                          <Button size="sm" variant="outline" className="text-purple-600 hover:bg-purple-50" onClick={() => handleUpdateStatus(app.id, "INTERVIEWED")} disabled={app.status === "INTERVIEWED"}>
+                                            <UserCheck className="w-4 h-4 mr-1" /> Mark Interviewed
                                           </Button>
-                                          <Button 
-                                            size="sm" 
-                                            variant="outline"
-                                            className="text-red-600 hover:text-red-700"
-                                            onClick={() => handleUpdateStatus(app.id, "REJECTED")}
-                                          >
+                                          <Button size="sm" variant="outline" className="text-red-600 hover:bg-red-50" onClick={() => handleUpdateStatus(app.id, "REJECTED")} disabled={app.status === "REJECTED"}>
                                             <XCircle className="w-4 h-4 mr-1" /> Reject
                                           </Button>
-                                          <Button 
-                                            size="sm" 
-                                            className="bg-green-600 hover:bg-green-700"
-                                            onClick={() => handleUpdateStatus(app.id, "ACCEPTED")}
-                                          >
+                                          <Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={() => handleUpdateStatus(app.id, "ACCEPTED")} disabled={app.status === "ACCEPTED"}>
                                             <CheckCircle className="w-4 h-4 mr-1" /> Accept
                                           </Button>
                                         </div>
                                       </div>
-                                    </div>
+                                    )}
                                   </div>
                                 ))}
                               </div>
@@ -1871,11 +2042,11 @@ export default function JobBoardApp() {
       </Dialog>
 
       {/* Post Job Modal */}
-      <Dialog open={showPostJobModal} onOpenChange={setShowPostJobModal}>
+      <Dialog open={showPostJobModal} onOpenChange={(open) => { setShowPostJobModal(open); if (!open) setEditingJob(null); }}>
         <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Post a New Job</DialogTitle>
-            <DialogDescription>Fill in the details to post a new job opening</DialogDescription>
+            <DialogTitle>{editingJob ? "Edit Job Posting" : "Post a New Job"}</DialogTitle>
+            <DialogDescription>{editingJob ? `Editing: ${editingJob.title}` : "Fill in the details to post a new job opening"}</DialogDescription>
           </DialogHeader>
           <form onSubmit={handlePostJob} className="space-y-4">
             <div className="grid md:grid-cols-2 gap-4">
@@ -2021,25 +2192,25 @@ export default function JobBoardApp() {
             <div>
               <h4 className="font-semibold mb-4">For Job Seekers</h4>
               <ul className="space-y-2 text-sm text-slate-400">
-                <li>Browse Jobs</li>
-                <li>Career Resources</li>
-                <li>Salary Guide</li>
+                <li><NextLink href="/" className="hover:text-white transition-colors">Browse Jobs</NextLink></li>
+                <li><NextLink href="/#resources" className="hover:text-white transition-colors">Career Resources</NextLink></li>
+                <li><NextLink href="/#salary" className="hover:text-white transition-colors">Salary Guide</NextLink></li>
               </ul>
             </div>
             <div>
               <h4 className="font-semibold mb-4">For Employers</h4>
               <ul className="space-y-2 text-sm text-slate-400">
-                <li>Post a Job</li>
-                <li>Browse Candidates</li>
-                <li>Pricing</li>
+                <li><NextLink href="/" className="hover:text-white transition-colors">Post a Job</NextLink></li>
+                <li><NextLink href="/" className="hover:text-white transition-colors">Browse Candidates</NextLink></li>
+                <li><NextLink href="/#pricing" className="hover:text-white transition-colors">Pricing</NextLink></li>
               </ul>
             </div>
             <div>
               <h4 className="font-semibold mb-4">Company</h4>
               <ul className="space-y-2 text-sm text-slate-400">
-                <li>About Us</li>
-                <li>Contact</li>
-                <li>Privacy Policy</li>
+                <li><NextLink href="/about" className="hover:text-white transition-colors">About Us</NextLink></li>
+                <li><span className="cursor-not-allowed">Contact</span></li>
+                <li><span className="cursor-not-allowed">Privacy Policy</span></li>
               </ul>
             </div>
           </div>

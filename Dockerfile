@@ -14,9 +14,6 @@ COPY . .
 # Disable telemetry during build
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Generate Prisma Client
-RUN bunx prisma generate
-
 # Run build script which includes standalone copying commands in package.json
 RUN bun run build
 

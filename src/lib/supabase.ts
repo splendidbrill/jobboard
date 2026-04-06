@@ -39,16 +39,30 @@ export const api = {
   
   async post(endpoint: string, data: any) {
     const headers = await getAuthHeaders()
-    const res = await fetch(`${API_URL}${endpoint}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(data)
-    })
-    if (!res.ok) {
-      const error = await res.json().catch(() => ({ detail: res.statusText }))
-      throw new Error(error.detail || res.statusText)
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 10000) // 10 second timeout
+
+    try {
+      const res = await fetch(`${API_URL}${endpoint}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(data),
+        signal: controller.signal
+      })
+      clearTimeout(timeoutId)
+
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({ detail: res.statusText }))
+        throw new Error(error.detail || res.statusText)
+      }
+      return res.json()
+    } catch (error: any) {
+      clearTimeout(timeoutId)
+      if (error.name === 'AbortError') {
+        throw new Error('Request timed out - backend may be unresponsive')
+      }
+      throw error
     }
-    return res.json()
   },
   
   async put(endpoint: string, data: any) {

@@ -15,23 +15,42 @@ router = APIRouter(prefix="/users", tags=["Users"])
 @router.post("/", response_model=UserResponse)
 async def create_user(
     user_data: UserCreate,
+    current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Create a user record after Supabase authentication
     Called from frontend after successful Supabase signup
     """
-    # Check if user already exists
-    existing_user = db.query(User).filter(User.email == user_data.email).first()
+    # Check if user already exists (by auth ID first, then by email)
+    existing_user = (
+        db.query(User).filter(User.id == current_user.id).first()
+        or db.query(User).filter(User.email == user_data.email).first()
+    )
     if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User already exists"
-        )
+        # Always update the role — user may have re-onboarded with a different choice
+        existing_user.role = user_data.role
+        existing_user.id = current_user.id  # ensure ID is synced to auth ID
+        db.commit()
+        db.refresh(existing_user)
+
+        # If they switched to COMPANY, make sure a company profile exists
+        if user_data.role == UserRole.COMPANY:
+            existing_company = db.query(Company).filter(Company.user_id == existing_user.id).first()
+            if not existing_company:
+                company = Company(
+                    id=str(uuid.uuid4()),
+                    user_id=existing_user.id,
+                    company_name=existing_user.name
+                )
+                db.add(company)
+                db.commit()
+
+        return existing_user
     
-    # Create new user
+    # Create new user with the actual Supabase Auth ID
     user = User(
-        id=str(uuid.uuid4()),
+        id=current_user.id,
         email=user_data.email,
         name=user_data.name,
         phone=user_data.phone,
@@ -53,6 +72,7 @@ async def create_user(
         db.commit()
     
     return user
+
 
 
 @router.get("/me", response_model=UserResponse)

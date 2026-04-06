@@ -1,58 +1,71 @@
-'use client'
+"use client"
 
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { toast } from 'sonner'
 
 export default function AuthCallback() {
   const router = useRouter()
-  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    const handleCallback = async () => {
+    const handleAuthCallback = async () => {
       try {
-        const { data: { session }, error } = await supabase.auth.getSession()
-        
+        // Get the code from the URL (Supabase PKCE flow)
+        const params = new URLSearchParams(window.location.search)
+        const code = params.get('code')
+        const error = params.get('error')
+        const errorDescription = params.get('error_description')
+
         if (error) {
-          setError(error.message)
+          console.error('OAuth error:', error, errorDescription)
+          toast.error(errorDescription || 'Authentication failed')
+          router.push('/')
           return
         }
 
-        if (session) {
+        if (code) {
+          // Exchange the code for a session — this is REQUIRED for PKCE OAuth
+          const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
+          
+          if (exchangeError) {
+            console.error('Code exchange error:', exchangeError)
+            toast.error('Authentication failed: ' + exchangeError.message)
+            router.push('/')
+            return
+          }
+
+          if (data.session) {
+            // Session is now stored — AuthContext will detect it via onAuthStateChange
+            router.push('/')
+            return
+          }
+        }
+
+        // Fallback: check if session already exists (implicit flow)
+        const { data: sessionData } = await supabase.auth.getSession()
+        if (sessionData.session) {
           router.push('/')
         } else {
+          console.error('No session and no code found in callback URL')
+          toast.error('Authentication failed. Please try again.')
           router.push('/')
         }
-      } catch (err: any) {
-        setError(err.message)
+      } catch (err) {
+        console.error('Auth callback error:', err)
+        toast.error('Authentication failed')
+        router.push('/')
       }
     }
 
-    handleCallback()
+    handleAuthCallback()
   }, [router])
-
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <h1 className="text-2xl font-bold text-red-600 mb-4">Authentication Error</h1>
-          <p className="text-slate-600">{error}</p>
-          <button 
-            onClick={() => router.push('/')}
-            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg"
-          >
-            Go Home
-          </button>
-        </div>
-      </div>
-    )
-  }
 
   return (
     <div className="min-h-screen flex items-center justify-center">
       <div className="text-center">
-        <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-        <p className="text-slate-600">Completing authentication...</p>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+        <p className="text-slate-600">Completing sign in...</p>
       </div>
     </div>
   )
