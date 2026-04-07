@@ -130,6 +130,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const newUser = await res.json()
+      console.log('API response user:', newUser)
+      console.log('User role from API:', newUser.role)
       setUser(newUser)
       setRequireRoleSelection(false)
       setRequireEmailConfirmation(false)

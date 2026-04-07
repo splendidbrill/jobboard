@@ -81,11 +81,14 @@ export default function OnboardingPage() {
         <div className="grid md:grid-cols-2 gap-4">
           <button 
             onClick={async () => {
+              console.log("Clicked: I am looking for a job");
               toast.loading("Setting up your account...", { id: "onboarding" });
               const { error } = await completeOnboarding("JOB_SEEKER");
               if (error) {
+                console.error("Error completing onboarding:", error);
                 toast.error(`Failed: ${error.message || error}`, { id: "onboarding" });
               } else {
+                console.log("Onboarding completed successfully");
                 toast.success("Welcome aboard!", { id: "onboarding" });
                 router.push("/");
               }
@@ -101,11 +104,14 @@ export default function OnboardingPage() {
           
           <button 
             onClick={async () => {
+              console.log("Clicked: I am hiring");
               toast.loading("Setting up your account...", { id: "onboarding" });
               const { error } = await completeOnboarding("COMPANY");
               if (error) {
+                console.error("Error completing onboarding:", error);
                 toast.error(`Failed: ${error.message || error}`, { id: "onboarding" });
               } else {
+                console.log("Onboarding completed successfully");
                 toast.success("Welcome aboard!", { id: "onboarding" });
                 router.push("/");
               }

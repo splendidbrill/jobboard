@@ -29,10 +29,12 @@ async def create_user(
     )
     if existing_user:
         # Always update the role — user may have re-onboarded with a different choice
+        print(f"Updating existing user {existing_user.email} role from {existing_user.role} to {user_data.role}")
         existing_user.role = user_data.role
         existing_user.id = current_user.id  # ensure ID is synced to auth ID
         db.commit()
         db.refresh(existing_user)
+        print(f"User updated successfully: {existing_user.email} role is now {existing_user.role}")
 
         # If they switched to COMPANY, make sure a company profile exists
         if user_data.role == UserRole.COMPANY:
