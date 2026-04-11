@@ -11,6 +11,10 @@ FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# ---> NEW: Generate Prisma Client <---
+# This ensures Next.js has access to the generated client during the build process.
+RUN bunx prisma generate
+
 # Disable telemetry during build
 ENV NEXT_TELEMETRY_DISABLED=1
 
