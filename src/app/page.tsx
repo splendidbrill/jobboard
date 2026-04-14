@@ -297,8 +297,10 @@ export default function JobBoardApp() {
   // Handle login
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
+    console.log('handleLogin called with:', loginForm.email)
     try {
       const { error } = await signIn(loginForm.email, loginForm.password)
+      console.log('handleLogin result, error:', error)
       if (error) {
         toast.error(error.message || "Invalid email or password")
       } else {
@@ -307,6 +309,7 @@ export default function JobBoardApp() {
         setLoginForm({ email: "", password: "" })
       }
     } catch (error: any) {
+      console.error('handleLogin exception:', error)
       toast.error(error.message || "Login failed")
     }
   }
